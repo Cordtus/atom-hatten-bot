@@ -1,0 +1,20 @@
+{
+  "name": "atom-hatten-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "repository": "https://github.com/Cordtus/atom-hatten-bot.git",
+  "author": "Cordtus <Cordtus@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  },
+  "scripts": {
+    "start": "node bot1.js",
+    "dev": "nodemon bot1.js"
+  }
+}
