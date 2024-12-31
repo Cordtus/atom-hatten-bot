@@ -1,61 +1,65 @@
-// Import Telegraf
+// Import Telegraf and required modules
 import { Telegraf } from 'telegraf';
+import fetch from 'node-fetch';
 
 // Initialize the bot with your token
 const bot = new Telegraf('7541859084:AAFgtyE0cFG66QfY3wC2HwWdUHSCy4FunLs');
 
-// Define the target chat ID and the bot ID to respond to
+// Define the target chat ID
 const targetChatId = '-1001583376702';
-const botId = 331761115; // CryptoWhale bot ID
 
-// Global logging for incoming updates
-bot.use((ctx, next) => {
-  console.log('Incoming update:', JSON.stringify(ctx.update, null, 2)); // Log entire update object in detail
-  return next();
-});
-
-// Listen for all messages in the target group
-bot.on('message', async (ctx) => {
+// Function to fetch the price of ATOM from CoinGecko
+async function fetchAtomPrice() {
   try {
-    console.log('Incoming message context:', JSON.stringify(ctx.message, null, 2)); // Log all messages for debugging
-
-    // Ensure the message is from the target group
-    if (String(ctx.chat.id) === targetChatId && ctx.message.text) {
-      console.log('Message detected in target group:', ctx.message.text);
-
-      // Check if the sender is the CryptoWhale bot
-      if (ctx.message.from.id === botId) {
-        console.log('Message is from CryptoWhale bot:', ctx.message.text);
-
-        // Match the price in the message text
-        const priceRegex = /ATOM\s+\$([0-9]+\.[0-9]{2})/;
-        const match = ctx.message.text.match(priceRegex);
-
-        if (match) {
-          const price = match[1];
-          console.log('Price extracted from message:', price); // Debugging extracted price
-          const response = `and just like that atom will NEVER be under $${price} again`;
-
-          // Respond in the group
-          await ctx.reply(response);
-          console.log('Response sent:', response); // Log the response sent
-        } else {
-          console.log('No price match found in CryptoWhale bot message'); // Debugging
-        }
-      } else {
-        console.log('Message is not from CryptoWhale bot.'); // Debugging
-      }
+    const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=cosmos&vs_currencies=usd');
+    if (!response.ok) throw new Error('Failed to fetch price');
+    const data = await response.json();
+    if (data && data.cosmos && data.cosmos.usd) {
+      return data.cosmos.usd;
     } else {
-      console.log('Message not from target group or does not have text.'); // Debugging
+      throw new Error('Invalid data format');
     }
-  } catch (err) {
-    console.error('Error processing message:', err);
+  } catch (error) {
+    console.error('Error fetching ATOM price:', error);
+    return null;
+  }
+}
+
+// Function to send a message with the current ATOM price
+async function sendPriceMessage() {
+  const price = await fetchAtomPrice();
+  if (price !== null) {
+    const response = `and just like that atom will NEVER be under $${price.toFixed(2)} again`;
+    try {
+      await bot.telegram.sendMessage(targetChatId, response);
+      console.log('Price message sent:', response);
+    } catch (error) {
+      console.error('Error sending message:', error);
+    }
+  } else {
+    console.log('Could not retrieve price, no message sent.');
+  }
+}
+
+// Set an interval to check the price every 6 hours (21600000 ms)
+setInterval(sendPriceMessage, 21600000);
+// Add a command to manually trigger the price message
+bot.command('price', async (ctx) => {
+  try {
+    await sendPriceMessage();
+  } catch (error) {
+    console.error('Error triggering manual price message:', error);
+    ctx.reply('Failed to send price message. Please try again later.');
   }
 });
 
 // Start the bot
 bot.launch()
-  .then(() => console.log('Bot is running'))
+  .then(() => {
+    console.log('Bot is running');
+    // Send an initial message when the bot starts
+    sendPriceMessage();
+  })
   .catch((err) => console.error('Failed to launch bot:', err));
 
 // Handle graceful shutdown
