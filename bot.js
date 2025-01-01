@@ -2,16 +2,14 @@
 
 import { Telegraf } from 'telegraf';
 import fetch from 'node-fetch';
-import dotenv from 'dotenv';
 
-dotenv.config();
-
-// validate env
+// validate environment variables
 if (!process.env.BOT_TOKEN || !process.env.TARGET_CHAT_ID) {
-  console.error('Missing BOT_TOKEN or TARGET_CHAT_ID in .env file');
+  console.error('Missing BOT_TOKEN or TARGET_CHAT_ID in environment');
   process.exit(1);
 }
 
+// initialize bot with token
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 const targetChatId = process.env.TARGET_CHAT_ID;
