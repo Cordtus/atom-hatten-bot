@@ -16,8 +16,9 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 
 const targetChatId = process.env.TARGET_CHAT_ID;
 
-// cooldown map
-const cooldowns = new Map();
+// cooldown maps
+const priceCooldowns = new Map();
+const commandCooldowns = new Map();
 
 // fetch price
 async function fetchAtomPrice() {
@@ -48,60 +49,89 @@ async function fetchWithRetry(url, retries = 3) {
   }
 }
 
-// check and set global cooldown
-function isCooldownActive(chatId) {
+// check and set cooldowns
+function isCooldownActive(chatId, cooldownMap) {
   const now = Date.now();
-  return cooldowns.has(chatId) && cooldowns.get(chatId) > now;
+  return cooldownMap.has(chatId) && cooldownMap.get(chatId) > now;
 }
 
-function setCooldown(chatId, durationMs) {
-  if (!isCooldownActive(chatId)) { // prevent compounding cooldown timer
-    const now = Date.now();
-    cooldowns.set(chatId, now + durationMs);
-  }
+function setCooldown(chatId, durationMs, cooldownMap) {
+  const now = Date.now();
+  cooldownMap.set(chatId, now + durationMs);
 }
 
 // chat listener
 bot.on('text', async (ctx) => {
   try {
+    if (!ctx.message.text || typeof ctx.message.text !== 'string') {
+      console.log('Ignored non-text message');
+      return;
+    }
+
+    const messageText = ctx.message.text.trim();
+
     // Ignore messages not starting with '/'
-    if (!ctx.message.text.startsWith('/')) {
+    if (!messageText.startsWith('/')) {
       console.log('Ignored message not starting with /');
       return;
     }
 
     const chatId = String(ctx.chat.id);
 
-    // check cooldown
-    if (isCooldownActive(chatId)) {
-      console.log('Cooldown active, ignoring message');
+    // verify msg is from target chat
+    if (chatId !== targetChatId) {
+      console.log('Ignored message from non-target chat:', chatId);
       return;
     }
 
-    // verify message is in target group
-    if (chatId === targetChatId) {
-      const messageText = ctx.message.text.toLowerCase();
+    // cooldowns
+    const cooldownDuration = 10 * 60 * 1000; // 10 minutes
 
-      // batch commands
+    if (messageText === '/price') {
+      console.log('Matched /price command');
+
+      if (isCooldownActive(chatId, priceCooldowns)) {
+        console.log('Cooldown active for /price, ignoring message');
+        return;
+      }
+
+      // price cooldown
+      setCooldown(chatId, cooldownDuration, priceCooldowns);
+
+      try {
+        const price = await fetchAtomPrice();
+        if (price !== null) {
+          const response = `and just like that atom will NEVER be under $${price.toFixed(2)} again`;
+          await ctx.reply(response);
+          console.log('Price message sent:', response);
+        } else {
+          console.log('Could not retrieve price, no message sent.');
+        }
+      } catch (error) {
+        console.error('Error fetching price immediately for /price command:', error);
+      }
+    } else {
       const atomCommandRegex = /^\/(?:p|mp)(?:\s+\S+)*\s+atom(?:\s+\S+)*$/;
-      if (atomCommandRegex.test(messageText)) {
-        console.log('Matched command, waiting for bot response');
 
-        // set cooldown timestamp
-        setCooldown(chatId, 10 * 60 * 1000); // 10 minutes
+      if (atomCommandRegex.test(messageText.toLowerCase())) {
+        console.log('Matched /p or /mp command');
 
-        // 3s wait before responding
+        if (isCooldownActive(chatId, commandCooldowns)) {
+          console.log('Cooldown active for /p or /mp, ignoring message');
+          return;
+        }
+
+        // p or mp cooldown
+        setCooldown(chatId, cooldownDuration, commandCooldowns);
+
+        // 3s wait before response
         const timer = setTimeout(async () => {
           try {
             const price = await fetchAtomPrice();
             if (price !== null) {
               const response = `and just like that atom will NEVER be under $${price.toFixed(2)} again`;
-              try {
-                await ctx.reply(response);
-                console.log('Price message sent:', response);
-              } catch (error) {
-                console.error('Error sending message:', error);
-              }
+              await ctx.reply(response);
+              console.log('Price message sent:', response);
             } else {
               console.log('Could not retrieve price, no message sent.');
             }
@@ -110,7 +140,6 @@ bot.on('text', async (ctx) => {
           }
         }, 3000);
 
-        // store timer for cleanup on shutdown
         timers.add(timer);
       }
     }
