@@ -1,21 +1,30 @@
-// Import Telegraf and required modules
+// bot.js
+
 import { Telegraf } from 'telegraf';
 import fetch from 'node-fetch';
+import dotenv from 'dotenv';
 
-// Initialize the bot with your token
-const bot = new Telegraf('7541859084:AAFgtyE0cFG66QfY3wC2HwWdUHSCy4FunLs');
+dotenv.config();
 
-// Define the target chat ID
-const targetChatId = '-1001583376702';
+// validate env
+if (!process.env.BOT_TOKEN || !process.env.TARGET_CHAT_ID) {
+  console.error('Missing BOT_TOKEN or TARGET_CHAT_ID in .env file');
+  process.exit(1);
+}
 
-// Function to fetch the price of ATOM from CoinGecko
+const bot = new Telegraf(process.env.BOT_TOKEN);
+
+const targetChatId = process.env.TARGET_CHAT_ID;
+
+// cooldown map
+const cooldowns = new Map();
+
+// fetch price
 async function fetchAtomPrice() {
   try {
-    const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=cosmos&vs_currencies=usd');
-    if (!response.ok) throw new Error('Failed to fetch price');
-    const data = await response.json();
-    if (data && data.cosmos && data.cosmos.usd) {
-      return data.cosmos.usd;
+    const response = await fetchWithRetry('https://api.coingecko.com/api/v3/simple/price?ids=cosmos&vs_currencies=usd');
+    if (response && response.cosmos && response.cosmos.usd) {
+      return response.cosmos.usd;
     } else {
       throw new Error('Invalid data format');
     }
@@ -25,43 +34,113 @@ async function fetchAtomPrice() {
   }
 }
 
-// Function to send a message with the current ATOM price
-async function sendPriceMessage() {
-  const price = await fetchAtomPrice();
-  if (price !== null) {
-    const response = `and just like that atom will NEVER be under $${price.toFixed(2)} again`;
+// api call retry
+async function fetchWithRetry(url, retries = 3) {
+  for (let i = 0; i < retries; i++) {
     try {
-      await bot.telegram.sendMessage(targetChatId, response);
-      console.log('Price message sent:', response);
-    } catch (error) {
-      console.error('Error sending message:', error);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
+      return await response.json();
+    } catch (err) {
+      console.error(`Attempt ${i + 1} failed:`, err);
+      if (i === retries - 1) throw err;
     }
-  } else {
-    console.log('Could not retrieve price, no message sent.');
   }
 }
 
-// Set an interval to check the price every 6 hours (21600000 ms)
-setInterval(sendPriceMessage, 21600000);
-// Add a command to manually trigger the price message
-bot.command('price', async (ctx) => {
+// check and set global cooldown
+function isCooldownActive(chatId) {
+  const now = Date.now();
+  return cooldowns.has(chatId) && cooldowns.get(chatId) > now;
+}
+
+function setCooldown(chatId, durationMs) {
+  if (!isCooldownActive(chatId)) { // prevent compounding cooldown timer
+    const now = Date.now();
+    cooldowns.set(chatId, now + durationMs);
+  }
+}
+
+// chat listener
+bot.on('text', async (ctx) => {
   try {
-    await sendPriceMessage();
-  } catch (error) {
-    console.error('Error triggering manual price message:', error);
-    ctx.reply('Failed to send price message. Please try again later.');
+    // Ignore messages not starting with '/'
+    if (!ctx.message.text.startsWith('/')) {
+      console.log('Ignored message not starting with /');
+      return;
+    }
+
+    const chatId = String(ctx.chat.id);
+
+    // check cooldown
+    if (isCooldownActive(chatId)) {
+      console.log('Cooldown active, ignoring message');
+      return;
+    }
+
+    // verify message is in target group
+    if (chatId === targetChatId) {
+      const messageText = ctx.message.text.toLowerCase();
+
+      // batch commands
+      const atomCommandRegex = /^\/(?:p|mp)(?:\s+\S+)*\s+atom(?:\s+\S+)*$/;
+      if (atomCommandRegex.test(messageText)) {
+        console.log('Matched command, waiting for bot response');
+
+        // set cooldown timestamp
+        setCooldown(chatId, 10 * 60 * 1000); // 10 minutes
+
+        // 3s wait before responding
+        const timer = setTimeout(async () => {
+          try {
+            const price = await fetchAtomPrice();
+            if (price !== null) {
+              const response = `and just like that atom will NEVER be under $${price.toFixed(2)} again`;
+              try {
+                await ctx.reply(response);
+                console.log('Price message sent:', response);
+              } catch (error) {
+                console.error('Error sending message:', error);
+              }
+            } else {
+              console.log('Could not retrieve price, no message sent.');
+            }
+          } catch (error) {
+            console.error('Error during delayed price fetch:', error);
+          }
+        }, 3000);
+
+        // store timer for cleanup on shutdown
+        timers.add(timer);
+      }
+    }
+  } catch (err) {
+    console.error('Error processing message:', err);
   }
 });
 
-// Start the bot
+// timer management for graceful shutdown
+const timers = new Set();
+function clearAllTimers() {
+  for (const timer of timers) {
+    clearTimeout(timer);
+  }
+  timers.clear();
+}
+
+// start bot
 bot.launch()
   .then(() => {
     console.log('Bot is running');
-    // Send an initial message when the bot starts
-    sendPriceMessage();
   })
   .catch((err) => console.error('Failed to launch bot:', err));
 
-// Handle graceful shutdown
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// graceful shutdown
+process.once('SIGINT', () => {
+  clearAllTimers();
+  bot.stop('SIGINT');
+});
+process.once('SIGTERM', () => {
+  clearAllTimers();
+  bot.stop('SIGTERM');
+});
